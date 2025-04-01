@@ -1,0 +1,145 @@
+definitions:
+  environment:
+    shared_env: &shared_env
+      groups:
+        - shorebird_credentials
+        - google_credentials
+      vars:
+        # The bundle ID of this example app.
+        # Replace this with your app's bundle id.
+        BUNDLE_ID: com.iraq.property.iraqRealEstate
+        FLUTTER_VERSION: 3.24.5
+  scripts:
+    # Download the Shorebird CLI and add it to the PATH.
+    - &shorebird_install
+      name: Install Shorebird
+      script: |
+        # Install Shorebird
+        curl --proto '=https' --tlsv1.2 https://raw.githubusercontent.com/shorebirdtech/install/main/install.sh -sSf | bash
+
+        # Add Shorebird to PATH
+        echo PATH="$HOME/.shorebird/bin:$PATH" >> $CM_ENV
+    - &ios_initialize_keychain
+      # Set up the keychain to be used for code signing. Create the keychain
+      #   at specified path with specified password with given timeout.
+      # Make it default and unlock it for upcoming use.
+      name: Set up keychain to be used for codesigning using Codemagic CLI 'keychain' command
+      script: |
+        keychain initialize
+    - &add_certs_to_keychain
+      name: Add certs to keychain
+      script: |
+        keychain add-certificates
+    - &use_profiles
+      # This generates an export_options.plist file that tells Xcode
+      #   how to package our app. We explicitly set
+      #   manageAppVersionAndBuildNumber so that we can control which
+      #   version and build number are used for releasing and patching.
+      name: Set up code signing settings on Xcode project
+      script: |
+        xcode-project use-profiles --custom-export-options={\"manageAppVersionAndBuildNumber\":false}
+    - &fetch_dependencies
+      name: Fetch Dependencies
+      script: |
+        flutter pub get
+    - &flutter_analyze
+      name: Run static code analysis
+      script: flutter analyze
+    - &setup_local_properties
+      name: Set up local.properties
+      script: echo "flutter.sdk=$HOME/programs/flutter" > "$CM_BUILD_DIR/android/local.properties"
+workflows:
+  release-shorebird-ios-android-workflow:
+    name: Release Shorebird Android and iOS Workflow
+    instance_type: mac_mini_m1
+    integrations:
+      app_store_connect: apple credential
+    environment:
+      <<: *shared_env
+      ios_signing:
+        distribution_type: app_store
+        bundle_identifier: "$BUNDLE_ID"
+      android_signing:
+        - somer-shorebird
+      groups:
+        - shorebird_credentials
+        - google_credentials
+      vars:
+        PACKAGE_NAME: "com.iraq.property"
+        GOOGLE_PLAY_TRACK: "internal"
+      flutter: 3.24.3
+      xcode: latest
+    triggering:
+      events:
+        - push
+      branch_patterns:
+        - pattern: release
+    scripts:
+#      - *flutter_analyze
+      - *setup_local_properties
+      - *shorebird_install
+      - *fetch_dependencies
+      - *ios_initialize_keychain
+      - *add_certs_to_keychain
+      - *use_profiles
+      - name: Build Android with Shorebird
+        script: |
+          shorebird release android --flutter-version=3.24.5
+      - name: Build iOS with Shorebird
+        script: |
+          shorebird release ios --flutter-version=3.24.5 \
+            --export-options-plist=/Users/builder/export_options.plist
+    artifacts:
+      - build/**/outputs/**/*.aab
+      - build/ios/ipa/*.ipa
+    publishing:
+      google_play:
+        credentials: $GCLOUD_SERVICE_ACCOUNT_CREDENTIALS
+        track: $GOOGLE_PLAY_TRACK
+        submit_as_draft: false
+      app_store_connect:
+        auth: integration
+        submit_to_testflight: true
+
+  patch-shorebird-ios-android-workflow:
+    name: Patch Shorebird Android and iOS Workflow
+    instance_type: mac_mini_m1
+    integrations:
+      app_store_connect: apple credential
+    environment:
+      <<: *shared_env
+      ios_signing:
+        distribution_type: app_store
+        bundle_identifier: "$BUNDLE_ID"
+      android_signing:
+        - somer-shorebird
+      groups:
+        - shorebird_credentials
+        - google_credentials
+      vars:
+        PACKAGE_NAME: "com.iraq.property"
+        GOOGLE_PLAY_TRACK: "internal"
+      flutter: 3.24.3
+      xcode: latest
+    triggering:
+      events:
+        - push
+      branch_patterns:
+        - pattern: release
+    scripts:
+#      - *flutter_analyze
+      - *setup_local_properties
+      - *shorebird_install
+      - *fetch_dependencies
+      - *ios_initialize_keychain
+      - *add_certs_to_keychain
+      - *use_profiles
+      - name: Build Android Patch with Shorebird
+        script: |
+          shorebird patch android \
+            --release-version=${{ inputs.release_version }}
+      - name: Build iOS Patch with Shorebird
+        script: |
+          shorebird patch ios \
+            --release-version=${{ inputs.release_version }} \
+            --export-options-plist=/Users/builder/export_options.plist
